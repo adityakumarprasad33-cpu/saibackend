@@ -3,6 +3,9 @@
   functions = "netlify/functions"
   publish = "public"
 
+[build.environment]
+  NPM_FLAGS = "--include=dev"
+
 [functions]
   node_bundler = "esbuild"
   external_node_modules = ["express", "firebase-admin"]
