@@ -20,15 +20,20 @@ export class ConfigProvider {
 
   private constructor() {
     const env = (process.env.NODE_ENV as EnvironmentProfile) || 'development';
+    const defaultCorsOrigins =
+      'http://localhost:8080,http://127.0.0.1:8080,http://localhost:8085,http://127.0.0.1:8085,http://localhost:3000,http://localhost:5000';
+    const configuredCorsOrigins = env === 'production'
+      ? (process.env.CORS_ALLOWED_ORIGINS ?? '')
+      : (process.env.CORS_ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN ?? defaultCorsOrigins);
     this.config = {
       environment: env,
       port: Number(process.env.PORT) || 5000,
       apiPrefix: '/api/v1',
       firebaseProjectId: process.env.FIREBASE_PROJECT_ID || 'samadhan-ai-78311',
-      corsAllowedOrigins: (process.env.CORS_ALLOWED_ORIGINS || process.env.CORS_ORIGIN || 'http://localhost:8080,http://127.0.0.1:8080,http://localhost:8085,http://127.0.0.1:8085,http://localhost:3000,http://localhost:5000')
+      corsAllowedOrigins: configuredCorsOrigins
         .split(',')
         .map(s => s.trim())
-        .filter(Boolean),
+        .filter(origin => Boolean(origin) && !/^__.*__$/.test(origin)),
       rateLimitMax: 100,
       rateLimitWindowMs: 60000,
     };
@@ -52,9 +57,11 @@ export class ConfigProvider {
       throw new Error(`[ConfigProvider] Invalid port: ${this.config.port}`);
     }
     if (this.config.environment === 'production') {
-      const configuredOrigins = process.env.CORS_ALLOWED_ORIGINS || process.env.CORS_ORIGIN;
-      if (!configuredOrigins || this.config.corsAllowedOrigins.length === 0 || this.config.corsAllowedOrigins.includes('*')) {
-        throw new Error('[ConfigProvider] Production requires explicit CORS_ALLOWED_ORIGINS.');
+      if (this.config.corsAllowedOrigins.includes('*')) {
+        throw new Error('[ConfigProvider] Production does not allow wildcard CORS origins.');
+      }
+      if (this.config.corsAllowedOrigins.length === 0) {
+        console.warn('[ConfigProvider] No production browser origins are allowed. Set CORS_ALLOWED_ORIGINS to the website HTTPS origin when the website is deployed.');
       }
       for (const origin of this.config.corsAllowedOrigins) {
         let parsed: URL;
