@@ -1,0 +1,10 @@
+node_modules
+src/data/
+dist
+.env
+.env.*
+!.env.example
+serviceAccountKey.json
+service-account*.json
+firebase-service-account.json
+npm-debug.log*

@@ -1,0 +1,34 @@
+﻿[build]
+  command = "npm run build"
+  functions = "netlify/functions"
+  publish = "public"
+
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["express", "firebase-admin"]
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/api/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/ready"
+  to = "/.netlify/functions/api/ready"
+  status = 200
+
+[[redirects]]
+  from = "/health"
+  to = "/.netlify/functions/api/health"
+  status = 200
+
+[[redirects]]
+  from = "/live"
+  to = "/.netlify/functions/api/live"
+  status = 200
+
+[[redirects]]
+  from = "/"
+  to = "/.netlify/functions/api/"
+  status = 200
+  force = true

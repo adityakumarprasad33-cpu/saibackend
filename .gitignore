@@ -1,0 +1,22 @@
+﻿# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+serviceAccountKey.json
+service-account*.json
+firebase-service-account.json
+
+# Local runtime data and logs
+src/data/users.json
+*.log
+.DS_Store
+Thumbs.db
