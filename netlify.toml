@@ -5,6 +5,7 @@
 
 [build.environment]
   NPM_FLAGS = "--include=dev"
+  SECRETS_SCAN_OMIT_KEYS = "NODE_ENV,AWS_LAMBDA_JS_RUNTIME,FIREBASE_PROJECT_ID"
 
 [functions]
   node_bundler = "esbuild"
