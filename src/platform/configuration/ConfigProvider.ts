@@ -22,8 +22,9 @@ export class ConfigProvider {
     const env = (process.env.NODE_ENV as EnvironmentProfile) || 'development';
     const defaultCorsOrigins =
       'http://localhost:8080,http://127.0.0.1:8080,http://localhost:8085,http://127.0.0.1:8085,http://localhost:3000,http://localhost:5000';
+    const productionCorsOrigin = 'https://runsai.netlify.app';
     const configuredCorsOrigins = env === 'production'
-      ? (process.env.CORS_ALLOWED_ORIGINS ?? '')
+      ? [process.env.CORS_ALLOWED_ORIGINS ?? '', productionCorsOrigin].join(',')
       : (process.env.CORS_ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN ?? defaultCorsOrigins);
     this.config = {
       environment: env,

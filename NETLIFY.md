@@ -14,11 +14,12 @@ Environment variables**, with Functions scope. Required runtime values include
 requires Node.js 22 (`AWS_LAMBDA_JS_RUNTIME=nodejs22.x`). Never set these on
 the website site or pass them into Flutter.
 
-The website site receives only its public API URL at build time. Its origin must
-be listed exactly in `CORS_ALLOWED_ORIGINS`; add production and required preview
-origins. The native app sends a Firebase user ID token as a Bearer token. The
-backend verifies it and accesses Firestore/Storage with its private Admin
-credentials.
+The website site receives only its public API URL at build time. Production
+allows `https://runsai.netlify.app` plus the HTTPS origins listed in
+`CORS_ALLOWED_ORIGINS`; add any production custom domain explicitly. Keep
+preview origins scoped to the contexts that need them. The native app sends a
+Firebase user ID token as a Bearer token. The backend verifies it and accesses
+Firestore/Storage with its private Admin credentials.
 
 Evidence images are uploaded by the backend to Cloudinary as authenticated assets.
 The backend returns time-limited download URLs; Cloudinary credentials must never
