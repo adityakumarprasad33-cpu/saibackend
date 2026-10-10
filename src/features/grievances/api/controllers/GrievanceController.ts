@@ -5,9 +5,8 @@ import { AuthenticatedRequest } from '../../../iam/api/middlewares/authMiddlewar
 import { PublicGrievanceIdGenerator } from '../../domain/services/PublicGrievanceIdGenerator';
 import { PinoSecurityAuditLogger } from '../../../iam/infrastructure/logging/PinoSecurityAuditLogger';
 import { FirestoreService } from '../../../../platform/firestore/FirestoreService';
+import { AuthorizationAction, AuthorizationService } from '../../../../platform/authorization/AuthorizationService';
 
-const STAFF_ROLES = new Set(['nodalofficer', 'departmentadmin', 'superadmin', 'governmentofficial']);
-const VALID_STATES = new Set(['Submitted', 'UnderReview', 'InProgress', 'Resolved', 'Rejected', 'Closed']);
 const VALID_PRIORITIES = new Set(['Low', 'Medium', 'High', 'Critical']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -19,24 +18,84 @@ function nonEmptyString(value: unknown): value is string {
 }
 
 export class GrievanceController {
-  private static async canAccess(req: AuthenticatedRequest, res: Response, id: string): Promise<boolean> {
+  public static async listTriage(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!req.user?.permissions?.includes('grievance.triage.read')) {
+      res.status(403).json({ code: 'PermissionDenied', message: 'Routing triage access is not granted.' });
+      return;
+    }
+    const limit = Number(req.query.limit ?? 25);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      res.status(400).json({ code: 'InvalidLimit', message: 'limit must be an integer from 1 to 50.' });
+      return;
+    }
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+    const result = await FirestoreService.listRoutingTriage(limit, cursor);
+    res.status(200).json(result);
+  }
+
+  public static async routeFromTriage(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!req.user?.permissions?.includes('grievance.triage.route')) {
+      res.status(403).json({ code: 'PermissionDenied', message: 'Routing triage decisions are not granted.' });
+      return;
+    }
+    const mappingId = req.body?.mappingId;
+    const categoryId = req.body?.categoryId;
+    const reason = req.body?.reason;
+    if (typeof mappingId !== 'string' || !/^[a-f0-9]{64}$/.test(mappingId) ||
+        typeof categoryId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(categoryId) ||
+        typeof reason !== 'string' || reason.trim().length < 8 || reason.trim().length > 500) {
+      res.status(400).json({ code: 'InvalidRoutingDecision', message: 'Provide a verified mapping, category, and an 8-500 character triage reason.' });
+      return;
+    }
+    const result = await FirestoreService.routeTriageGrievance(
+      String(req.params.id || ''), mappingId, categoryId, req.user!.uid, reason.trim(),
+    );
+    if (result === 'NOT_FOUND') {
+      res.status(404).json({ code: 'NotFound', message: 'Grievance not found.' });
+      return;
+    }
+    if (result === 'ALREADY_ROUTED') {
+      res.status(409).json({ code: 'AlreadyRouted', message: 'This grievance has already been routed.' });
+      return;
+    }
+    if (result === 'MAPPING_MISMATCH') {
+      res.status(422).json({ code: 'RoutingMappingMismatch', message: 'The selected active mapping does not match this grievance location and confirmed category.' });
+      return;
+    }
+    PinoSecurityAuditLogger.logSecurityEvent({
+      event: 'GRIEVANCE_ROUTED_FROM_TRIAGE', userId: req.user!.uid,
+      ipAddress: req.ip || 'unknown', userAgent: req.headers['user-agent'] || 'unknown',
+      correlationId: req.correlationId, auditId: `audit-triage-${randomUUID()}`,
+      details: { publicId: req.params.id, mappingId, categoryId },
+    });
+    res.status(200).json({ publicId: req.params.id, routingStatus: 'Routed' });
+  }
+
+  private static async loadAuthorized(
+    req: AuthenticatedRequest,
+    res: Response,
+    id: string,
+    action: AuthorizationAction,
+  ): Promise<Record<string, any> | null> {
     const grievance = await FirestoreService.getGrievanceByPublicId(id);
     if (!grievance) {
       res.status(404).json({ code: 'NotFound', message: 'Grievance not found' });
-      return false;
+      return null;
     }
-    const role = (req.user?.roleId || '').toLowerCase();
-    const ownerId = grievance.citizenUserId || grievance.citizen?.uid;
-    if (!STAFF_ROLES.has(role) && ownerId !== req.user?.uid) {
+    if (!AuthorizationService.allows(req, action, grievance)) {
       res.status(404).json({ code: 'NotFound', message: 'Grievance not found' });
-      return false;
+      return null;
     }
-    return true;
+    return grievance;
   }
 
   public static async create(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!AuthorizationService.canCreateGrievance(req)) {
+      res.status(403).json({ code: 'Forbidden', message: 'Only citizen accounts can submit grievances.' });
+      return;
+    }
     const body = req.body as Record<string, unknown>;
-    const { title, description, categoryId, department, slaHours, location, priority, aiClassification, evidenceList } = body;
+    const { title, description, categoryId, location, aiClassification, evidenceList } = body;
     if (!nonEmptyString(title) || title.trim().length > 200 || !nonEmptyString(description) || description.trim().length > 10000) {
       res.status(400).json({ code: 'InvalidInput', message: 'A title (up to 200 characters) and description (up to 10000 characters) are required.' });
       return;
@@ -81,28 +140,18 @@ export class GrievanceController {
         });
       }
     }
-    if (!isRecord(aiClassification)) {
-      res.status(400).json({ code: 'ClassificationRequired', message: 'A real AI classification is required before submission.' });
+    if (aiClassification !== undefined && !isRecord(aiClassification)) {
+      res.status(400).json({ code: 'InvalidClassification', message: 'AI output, when supplied, must be an object.' });
       return;
     }
-    const provider = aiClassification.provider;
-    const classifiedDepartment = aiClassification.department;
-    const classifiedPriority = aiClassification.priority;
-    const classifiedSla = aiClassification.slaHours;
-    if (!nonEmptyString(provider) || !nonEmptyString(classifiedDepartment) ||
-        typeof classifiedPriority !== 'string' || !VALID_PRIORITIES.has(classifiedPriority) || typeof classifiedSla !== 'number' ||
-        !Number.isInteger(classifiedSla) || classifiedSla < 1 || classifiedSla > 8760 ||
-        department !== classifiedDepartment || priority !== classifiedPriority || slaHours !== classifiedSla) {
-      res.status(400).json({ code: 'InvalidClassification', message: 'Department, priority, SLA, and provider must match the AI classification.' });
-      return;
-    }
-    const confidence = aiClassification.confidence ?? aiClassification.confidenceScore;
+    const aiSuggestion = isRecord(aiClassification) ? aiClassification : {};
+    const confidence = aiSuggestion.confidence ?? aiSuggestion.confidenceScore;
     if (confidence !== undefined && (typeof confidence !== 'number' || confidence < 0 || confidence > 1)) {
       res.status(400).json({ code: 'InvalidClassification', message: 'AI confidence must be between 0 and 1 when provided.' });
       return;
     }
-    if (categoryId !== undefined && !nonEmptyString(categoryId)) {
-      res.status(400).json({ code: 'InvalidInput', message: 'categoryId must be a non-empty string when provided.' });
+    if (categoryId !== undefined && (!nonEmptyString(categoryId) || categoryId.trim().length > 80)) {
+      res.status(400).json({ code: 'InvalidInput', message: 'categoryId must be a non-empty string up to 80 characters when provided.' });
       return;
     }
 
@@ -112,24 +161,33 @@ export class GrievanceController {
     const submittedAt = new Date().toISOString();
     const citizenUserId = req.user!.uid;
     const citizenEmail = req.user!.email;
+    const provider = typeof aiSuggestion.provider === 'string' ? aiSuggestion.provider.slice(0, 100) : undefined;
+    const suggestedDepartment = nonEmptyString(aiSuggestion.department) ? aiSuggestion.department.trim().slice(0, 160) : undefined;
+    const suggestedPriority = typeof aiSuggestion.priority === 'string' && VALID_PRIORITIES.has(aiSuggestion.priority)
+      ? aiSuggestion.priority : undefined;
+    const suggestedSlaHours = typeof aiSuggestion.slaHours === 'number' && Number.isInteger(aiSuggestion.slaHours) &&
+      aiSuggestion.slaHours >= 1 && aiSuggestion.slaHours <= 8760 ? aiSuggestion.slaHours : undefined;
     const classification = {
-      ...aiClassification,
-      model: provider,
+      source: 'untrusted-client-suggestion',
+      ...(provider ? { model: provider } : {}),
+      ...(suggestedDepartment ? { suggestedDepartment } : {}),
+      ...(suggestedPriority ? { suggestedPriority } : {}),
+      ...(suggestedSlaHours ? { suggestedSlaHours } : {}),
       ...(typeof confidence === 'number' ? { confidence } : {}),
-      department: classifiedDepartment,
     };
     const grievance = {
       publicId,
       uuid: randomUUID(),
       title: title.trim(),
       description: description.trim(),
-      department: classifiedDepartment,
+      department: 'Pending verified routing',
       ...(typeof categoryId === 'string' ? { categoryId } : {}),
-      slaHours: classifiedSla,
       citizenUserId,
       citizenEmail,
-      priority: classifiedPriority,
+      priority: 'Unclassified',
       state: 'Submitted',
+      routingStatus: 'NeedsTriage' as const,
+      version: 0,
       location: { ...location, district, stateCode, countryCode: 'IN' },
       aiClassification: classification,
       attachments,
@@ -144,11 +202,12 @@ export class GrievanceController {
       userAgent: req.headers['user-agent'] || 'unknown',
       correlationId: req.correlationId,
       auditId: req.auditId || `audit-grv-${randomUUID()}`,
-      details: { publicId, department: classifiedDepartment },
+      details: { publicId, routingStatus: 'NeedsTriage' },
     });
 
     res.status(201).json({
       ...grievance,
+      message: 'Grievance submitted and queued for verified department routing.',
       attachments: attachments.map(({ fileName, contentType, data }) => ({ fileName, contentType, sizeBytes: data.length })),
       citizenEmail,
     });
@@ -156,56 +215,66 @@ export class GrievanceController {
 
   public static async getById(req: AuthenticatedRequest, res: Response): Promise<void> {
     const id = String(req.params.id ?? '');
-    if (!await GrievanceController.canAccess(req, res, id)) return;
-    const found = await FirestoreService.getGrievanceByPublicId(id);
-    if (found) res.status(200).json(found);
+    const grievance = await GrievanceController.loadAuthorized(req, res, id, 'grievance.read');
+    if (grievance) res.status(200).json(grievance);
   }
 
   public static async list(req: AuthenticatedRequest, res: Response): Promise<void> {
-    const cloudGrievances = await FirestoreService.listGrievances(req.user!.uid);
-    res.status(200).json({ items: cloudGrievances, total: cloudGrievances.length, nextCursor: null });
-  }
-
-  public static async update(req: AuthenticatedRequest, res: Response): Promise<void> {
-    const id = String(req.params.id ?? '');
-    if (!await GrievanceController.canAccess(req, res, id)) return;
-    const role = (req.user?.roleId || '').toLowerCase();
-    if (!STAFF_ROLES.has(role)) {
-      res.status(403).json({ code: 'Forbidden', message: 'Only authorized staff can change grievance status.' });
+    if (!AuthorizationService.allows(req, 'grievance.list')) {
+      res.status(403).json({ code: 'Forbidden', message: 'A verified grievance scope is required.' });
       return;
     }
-    const state = req.body?.state;
-    if (!nonEmptyString(state) || !VALID_STATES.has(state)) {
-      res.status(400).json({ code: 'InvalidState', message: 'A supported grievance state is required.' });
+    const requestedLimit = Number(req.query.limit ?? 50);
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 100) {
+      res.status(400).json({ code: 'InvalidLimit', message: 'limit must be an integer from 1 to 100.' });
       return;
     }
-    await FirestoreService.updateGrievanceStatus(id, state);
-    await FirestoreService.addTimelineEvent(id, {
-      eventType: state,
-      title: `Status changed to ${state}`,
-      actorUserId: req.user?.uid,
-    });
-    res.status(200).json({ publicId: id, state, updatedAt: new Date().toISOString() });
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+    const result = req.user!.roleId.toLowerCase() === 'citizen'
+      ? await FirestoreService.listCitizenGrievances(req.user!.uid, requestedLimit, cursor)
+      : await FirestoreService.listScopedGrievances(req.user!.departmentId!, req.user!.jurisdictionIds || [], requestedLimit, cursor);
+    const items = result.items.filter(item => AuthorizationService.allows(req, 'grievance.read', item));
+    res.status(200).json({ items, total: items.length, nextCursor: result.nextCursor });
   }
 
   public static async getTimeline(req: AuthenticatedRequest, res: Response): Promise<void> {
     const id = String(req.params.id ?? '');
-    if (!await GrievanceController.canAccess(req, res, id)) return;
-    res.status(200).json({ events: await FirestoreService.listTimelineEvents(id) });
+    const grievance = await GrievanceController.loadAuthorized(req, res, id, 'timeline.read');
+    if (!grievance) return;
+    const events = await FirestoreService.listTimelineEvents(String(grievance.id || id));
+    const publicEvents = events
+      .filter(event => event.visibility === undefined || event.visibility === 'Citizen')
+      .map(event => ({
+        id: event.id,
+        ...(typeof event.eventType === 'string' ? { eventType: event.eventType } : {}),
+        ...(typeof event.title === 'string' ? { title: event.title } : {}),
+        ...(typeof event.description === 'string' ? { description: event.description } : {}),
+        ...(typeof event.createdAt === 'string' ? { createdAt: event.createdAt } : {}),
+      }));
+    res.status(200).json({ events: publicEvents });
   }
 
   public static async addComment(req: AuthenticatedRequest, res: Response): Promise<void> {
     const id = String(req.params.id ?? '');
-    if (!await GrievanceController.canAccess(req, res, id)) return;
+    const grievance = await GrievanceController.loadAuthorized(req, res, id, 'comment.citizen.create');
+    if (!grievance) return;
     const { message, visibility } = req.body as Record<string, unknown>;
     if (!nonEmptyString(message) || message.trim().length > 5000) {
       res.status(400).json({ code: 'InvalidComment', message: 'A comment of 1 to 5000 characters is required.' });
       return;
     }
-    const role = (req.user?.roleId || '').toLowerCase();
-    const allowedVisibility = STAFF_ROLES.has(role) ? ['Citizen', 'Internal'] : ['Citizen'];
-    const safeVisibility = typeof visibility === 'string' && allowedVisibility.includes(visibility) ? visibility : 'Citizen';
-    const commentId = await FirestoreService.addGrievanceRecord(id, 'comments', {
+    const safeVisibility = visibility === undefined ? 'Citizen' : visibility;
+    if (safeVisibility !== 'Citizen' && safeVisibility !== 'Internal') {
+      res.status(400).json({ code: 'InvalidComment', message: 'visibility must be Citizen or Internal.' });
+      return;
+    }
+    const action = safeVisibility === 'Internal' ? 'comment.internal.create' : 'comment.citizen.create';
+    if (!AuthorizationService.allows(req, action, grievance)) {
+      res.status(403).json({ code: 'Forbidden', message: 'This account cannot create that comment type.' });
+      return;
+    }
+    const documentId = String(grievance.id || id);
+    const commentId = await FirestoreService.addGrievanceRecord(documentId, 'comments', {
       authorUserId: req.user!.uid,
       visibility: safeVisibility,
       message: message.trim(),
@@ -215,7 +284,8 @@ export class GrievanceController {
 
   public static async uploadAttachment(req: AuthenticatedRequest, res: Response): Promise<void> {
     const id = String(req.params.id ?? '');
-    if (!await GrievanceController.canAccess(req, res, id)) return;
+    const grievance = await GrievanceController.loadAuthorized(req, res, id, 'attachment.upload');
+    if (!grievance) return;
     const { fileName, contentType, dataBase64 } = req.body as Record<string, unknown>;
     if (!nonEmptyString(fileName) || fileName.length > 255 ||
         !['image/jpeg', 'image/png', 'image/webp'].includes(String(contentType)) ||
@@ -229,7 +299,7 @@ export class GrievanceController {
       res.status(400).json({ code: 'InvalidEvidence', message: 'A valid image up to 768 KB is required.' });
       return;
     }
-    const item = await FirestoreService.addGrievanceAttachment(id, {
+    const item = await FirestoreService.addGrievanceAttachment(String(grievance.id || id), {
       fileName: fileName.trim().replace(/[\\/\u0000-\u001f]/g, '_'),
       contentType: String(contentType),
       data,
@@ -239,21 +309,23 @@ export class GrievanceController {
 
   public static async listAttachments(req: AuthenticatedRequest, res: Response): Promise<void> {
     const id = String(req.params.id ?? '');
-    if (!await GrievanceController.canAccess(req, res, id)) return;
-    const attachments = await FirestoreService.listGrievanceAttachments(id);
+    const grievance = await GrievanceController.loadAuthorized(req, res, id, 'attachment.read');
+    if (!grievance) return;
+    const attachments = await FirestoreService.listGrievanceAttachments(String(grievance.id || id));
     res.status(200).json({ items: attachments });
   }
 
   public static async submitFeedback(req: AuthenticatedRequest, res: Response): Promise<void> {
     const id = String(req.params.id ?? '');
-    if (!await GrievanceController.canAccess(req, res, id)) return;
+    const grievance = await GrievanceController.loadAuthorized(req, res, id, 'feedback.create');
+    if (!grievance) return;
     const { rating, feedbackText } = req.body as Record<string, unknown>;
     if (typeof rating !== 'number' || !Number.isInteger(rating) || rating < 1 || rating > 5 ||
         (feedbackText !== undefined && (typeof feedbackText !== 'string' || feedbackText.length > 5000))) {
       res.status(400).json({ code: 'InvalidFeedback', message: 'Rating must be 1 to 5; feedback must be 5000 characters or fewer.' });
       return;
     }
-    const feedbackId = await FirestoreService.addGrievanceRecord(id, 'feedback', {
+    const feedbackId = await FirestoreService.addGrievanceRecord(String(grievance.id || id), 'feedback', {
       citizenUserId: req.user!.uid,
       rating,
       ...(typeof feedbackText === 'string' ? { feedbackText: feedbackText.trim() } : {}),

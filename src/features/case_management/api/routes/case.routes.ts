@@ -17,6 +17,7 @@ router.use(requireRole('GovernmentOfficial', 'NodalOfficer', 'DepartmentAdmin', 
 router.post('/accept', CaseController.accept);
 router.post('/assign', CaseController.assign);
 router.post('/reassign', CaseController.reassign);
+router.post('/investigate', CaseController.investigate);
 router.post('/resolve', CaseController.resolve);
 router.post('/close', CaseController.close);
 router.get('/', CaseController.list);
