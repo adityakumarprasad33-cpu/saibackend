@@ -30,7 +30,7 @@ export class ConfigProvider {
       environment: env,
       port: Number(process.env.PORT) || 5000,
       apiPrefix: '/api/v1',
-      firebaseProjectId: process.env.FIREBASE_PROJECT_ID || 'samadhan-ai-78311',
+      firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
       corsAllowedOrigins: configuredCorsOrigins
         .split(',')
         .map(s => s.trim())

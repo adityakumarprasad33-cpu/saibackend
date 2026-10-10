@@ -10,8 +10,10 @@ Environment variables**, with Functions scope. Required runtime values include
 `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`,
 `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`,
 `GEMINI_API_KEY`, `HMAC_SECRET` (at least 32 bytes),
-`JWT_SECRET`, `CORS_ALLOWED_ORIGINS`, and `REDIS_URL`. Production startup also
-requires Node.js 22 (`AWS_LAMBDA_JS_RUNTIME=nodejs22.x`). Never set these on
+`JWT_SECRET`, `CORS_ALLOWED_ORIGINS`, and `REDIS_URL`. The build uses Node.js 22,
+pinned in `netlify.toml` and `package.json`. Set the Functions runtime to
+`nodejs22.x` through the Netlify UI environment variables; Netlify does not
+accept `AWS_LAMBDA_JS_RUNTIME` in `netlify.toml`. Never set backend secrets on
 the website site or pass them into Flutter.
 
 The website site receives only its public API URL at build time. Production
