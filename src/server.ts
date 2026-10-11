@@ -26,12 +26,18 @@ import { rateGuardMiddleware } from './platform/rateguard/middleware/rateGuardMi
 
 const app = express();
 const config = ConfigProvider.getInstance().getConfig();
+// Permit the local website preview to use the deployed API during development.
+// Keep this limited to the exact loopback origins and port used by the preview.
+const localPreviewOrigins = new Set([
+  'http://localhost:8093',
+  'http://127.0.0.1:8093',
+]);
 
 // Security & Parsing Middlewares
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || config.corsAllowedOrigins.includes('*') || config.corsAllowedOrigins.includes(origin)) {
+    if (!origin || config.corsAllowedOrigins.includes('*') || config.corsAllowedOrigins.includes(origin) || localPreviewOrigins.has(origin)) {
       callback(null, true);
       return;
     }
