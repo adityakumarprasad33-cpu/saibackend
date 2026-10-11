@@ -25,6 +25,9 @@ export class GeminiVisionProvider {
   private static get GEMINI_MODEL(): string {
     return process.env.GEMINI_MODEL || 'gemini-3.6-flash';
   }
+  public static get modelName(): string {
+    return this.GEMINI_MODEL;
+  }
   private static get thinkingLevel(): string {
     const level = process.env.GEMINI_THINKING_LEVEL;
     return level && ['minimal', 'low', 'medium', 'high'].includes(level) ? level : 'minimal';
@@ -84,7 +87,7 @@ export class GeminiVisionProvider {
     try {
       console.log(`[GeminiVisionProvider] Sending image (${cleanBase64.length} chars) to Gemini ${this.GEMINI_MODEL}...`);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -178,7 +181,7 @@ export class GeminiVisionProvider {
     try {
       console.log(`[GeminiVisionProvider] Prompting Gemini ${this.GEMINI_MODEL} text model...`);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
 
       const response = await fetch(url, {
         method: 'POST',

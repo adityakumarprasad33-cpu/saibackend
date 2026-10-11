@@ -16,6 +16,12 @@ pinned in `netlify.toml` and `package.json`. Set the Functions runtime to
 accept `AWS_LAMBDA_JS_RUNTIME` in `netlify.toml`. Never set backend secrets on
 the website site or pass them into Flutter.
 
+`GEMINI_API_KEY` powers hosted LLM and image-analysis fallback. `OLLAMA_API_URL`
+is optional and should only be set when the backend can reach a real Ollama
+service; Netlify does not provide a localhost Ollama daemon. Without that
+optional URL, AI requests go directly to Gemini instead of waiting on a local
+model timeout.
+
 The website site receives only its public API URL at build time. Production
 allows `https://runsai.netlify.app` plus the HTTPS origins listed in
 `CORS_ALLOWED_ORIGINS`; add any production custom domain explicitly. Keep

@@ -90,22 +90,24 @@ function parseGrievanceDraft(value: string): GeneratedGrievanceDraft | null {
 }
 
 export class ImageRecognitionService {
-  private static get ollamaUrl(): string {
-    return process.env.OLLAMA_API_URL || 'http://127.0.0.1:11434/api/generate';
+  private static get ollamaUrl(): string | null {
+    return process.env.OLLAMA_API_URL?.trim() || null;
   }
 
   /**
    * Stage 1a: Query local Ollama moondream vision model with base64 image.
    */
   private static async queryVisionModel(base64Data: string, promptText: string): Promise<string | null> {
+    const ollamaUrl = this.ollamaUrl;
+    if (!ollamaUrl) return null;
     try {
       console.log(`[ImageRecognitionService] Dispatching image (${base64Data.length} chars) to Ollama 'moondream' vision model at ${this.ollamaUrl}...`);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
 
       const cleanBase64 = base64Data.replace(/^data:image\/[a-z]+;base64,/, '').trim();
 
-      const response = await fetch(this.ollamaUrl, {
+      const response = await fetch(ollamaUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -141,12 +143,14 @@ export class ImageRecognitionService {
    * Stage 2a: Query local Ollama runixgov text LLM.
    */
   private static async queryRunixGov(promptText: string, maxTokens = 350): Promise<string | null> {
+    const ollamaUrl = this.ollamaUrl;
+    if (!ollamaUrl) return null;
     try {
       console.log(`[ImageRecognitionService] Prompting Ollama 'runixgov' governance model...`);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout for model generation
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch(this.ollamaUrl, {
+      const response = await fetch(ollamaUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
