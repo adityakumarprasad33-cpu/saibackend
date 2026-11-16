@@ -15,6 +15,21 @@ export interface RateLimitPolicy {
 }
 
 export class PolicyRegistry {
+  public static resolveGlobalAiPolicy(): RateLimitPolicy {
+    const configuredLimit = Number(process.env.AI_GLOBAL_RATE_LIMIT_MAX);
+    const limit = Number.isInteger(configuredLimit) && configuredLimit > 0
+      ? configuredLimit
+      : 600;
+    return {
+      name: 'AI_GLOBAL',
+      endpointPattern: /^\/api\/v1\/ai/i,
+      algorithm: 'SLIDING_WINDOW',
+      limit,
+      windowSeconds: 60,
+      failClosed: true,
+    };
+  }
+
   private static policies: RateLimitPolicy[] = [
     {
       name: 'AUTH_LOGIN',
@@ -47,11 +62,10 @@ export class PolicyRegistry {
     {
       name: 'AI_ASSISTANT',
       endpointPattern: /^\/api\/v1\/ai/i,
-      algorithm: 'RATE_CONCURRENCY',
-      limit: 30,
+      algorithm: 'SLIDING_WINDOW',
+      limit: 10,
       windowSeconds: 60,
-      failClosed: false,
-      maxConcurrency: 2,
+      failClosed: true,
     },
     {
       name: 'PUBLIC_HIERARCHY',

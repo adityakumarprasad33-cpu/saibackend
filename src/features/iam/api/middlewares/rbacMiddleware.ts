@@ -5,6 +5,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from './authMiddleware';
 import { PinoSecurityAuditLogger } from '../../infrastructure/logging/PinoSecurityAuditLogger';
+import { isPermissionId, PermissionId } from '../../../../platform/authorization/PermissionCatalog';
 
 /**
  * Enforces role requirement (e.g. Citizen, GovernmentOfficial, DepartmentAdmin, SuperAdmin).
@@ -44,6 +45,32 @@ export const requireRole = (...allowedRoles: string[]) => {
     }
 
     next();
+  };
+};
+
+/** Enforces an exact, current-record permission grant after authentication. */
+export const requirePermission = (permission: PermissionId) => {
+  if (!isPermissionId(permission)) throw new Error('Unknown permission configured on route.');
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+    if (req.user?.permissions?.includes(permission)) {
+      next();
+      return;
+    }
+    PinoSecurityAuditLogger.logSecurityEvent({
+      event: 'UnauthorizedAccessAttempt',
+      userId: req.user?.uid || 'anonymous',
+      ipAddress: req.ip || 'unknown',
+      userAgent: req.headers['user-agent'] || 'unknown',
+      correlationId: req.correlationId,
+      auditId: `audit-permission-${Date.now()}`,
+      details: { requestedPath: req.originalUrl, requiredPermission: permission },
+    });
+    res.status(403).json({
+      code: 'PermissionDenied',
+      permission,
+      message: 'This account does not have permission for this operation.',
+      correlationId: req.correlationId,
+    });
   };
 };
 

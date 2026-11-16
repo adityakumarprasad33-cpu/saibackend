@@ -41,12 +41,19 @@ export class RateGuardService {
     method: string,
     user?: { uid: string; roleId: string } | undefined,
     deviceHeader?: string | undefined,
-    correlationId?: string | undefined
+    correlationId?: string | undefined,
+    scope: 'default' | 'ip' | 'global-ai' = 'default',
   ): Promise<RateGuardDecision> {
     const dimensions = DimensionFactory.createDimensions(rawIp, endpoint, method, user, deviceHeader);
-    const policy = PolicyRegistry.resolvePolicy(endpoint, method);
+    const policy = scope === 'global-ai'
+      ? PolicyRegistry.resolveGlobalAiPolicy()
+      : PolicyRegistry.resolvePolicy(endpoint, method);
+    if (scope === 'ip') dimensions.userAccountHash = undefined;
+    if (scope === 'global-ai') {
+      dimensions.userAccountHash = DimensionFactory.createScopeHash('ai-global-budget');
+    }
 
-    let store = process.env.NODE_ENV === 'production' || this.primaryStore.isAvailable()
+    let store = this.primaryStore.isAvailable()
       ? this.primaryStore
       : this.fallbackStore;
 
@@ -87,11 +94,8 @@ export class RateGuardService {
 
       return decision;
     } catch (err) {
-      if (process.env.NODE_ENV === 'production') {
-        const unavailable = new Error('Distributed rate limiting is unavailable.') as Error & { statusCode: number };
-        unavailable.statusCode = 503;
-        throw unavailable;
-      }
+      console.warn(`[RateGuardService] Primary store evaluation failed (${err instanceof Error ? err.message : String(err)}). Falling back to memory store.`);
+
       // Redis outage / evaluation failure logic
       if (policy.failClosed) {
         return {

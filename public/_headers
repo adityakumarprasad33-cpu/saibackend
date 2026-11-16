@@ -1,0 +1,8 @@
+/employee-invitation.html
+  Cache-Control: no-store
+  Referrer-Policy: no-referrer
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'
+
+/employee-invitation.js
+  Cache-Control: no-store
+  Referrer-Policy: no-referrer

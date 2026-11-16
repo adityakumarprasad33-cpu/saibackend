@@ -28,6 +28,8 @@ export interface GrievanceResponseDTO {
   categoryId: string;
   subcategoryId?: string | undefined;
   departmentId?: string | undefined;
+  jurisdictionId?: string | undefined;
+  routingStatus: 'NeedsTriage' | 'Routed';
   priority: string;
   state: string;
   location: {

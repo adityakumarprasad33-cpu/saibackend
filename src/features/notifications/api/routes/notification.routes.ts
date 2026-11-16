@@ -6,11 +6,12 @@ import { Router } from 'express';
 import { NotificationController } from '../controllers/NotificationController';
 import { authMiddleware } from '../../../iam/api/middlewares/authMiddleware';
 import { correlationMiddleware } from '../../../iam/api/middlewares/correlationMiddleware';
+import { rateGuardMiddleware } from '../../../../platform/rateguard/middleware/rateGuardMiddleware';
 
 const router = Router();
 
 router.use(correlationMiddleware);
-router.use(authMiddleware);
+router.use(authMiddleware, rateGuardMiddleware);
 
 router.get('/', NotificationController.list);
 router.get('/unread-count', NotificationController.getUnreadCount);

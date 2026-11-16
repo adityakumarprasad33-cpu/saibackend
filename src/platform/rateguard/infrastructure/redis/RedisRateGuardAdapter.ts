@@ -47,10 +47,19 @@ export class RedisRateGuardAdapter implements IRateGuardStore {
           connectTimeout: 3000,
         });
 
-        this.client.on('connect', () => {
+        this.client.on('ready', () => {
           this.isConnected = true;
         });
 
+        this.client.on('close', () => {
+          this.isConnected = false;
+        });
+        this.client.on('reconnecting', () => {
+          this.isConnected = false;
+        });
+        this.client.on('end', () => {
+          this.isConnected = false;
+        });
         this.client.on('error', () => {
           this.isConnected = false;
         });
@@ -61,27 +70,25 @@ export class RedisRateGuardAdapter implements IRateGuardStore {
   }
 
   public isAvailable(): boolean {
-    return this.isConnected && this.client !== null;
+    return this.isConnected && this.client?.status === 'ready';
   }
 
   public async checkConnection(): Promise<void> {
-    if (!this.client) throw new Error('REDIS_URL is not configured.');
-    await this.client.ping();
+    const client = await this.waitUntilReady();
+    await client.ping();
   }
 
   public async evaluate(
     dimensions: RateGuardDimensions,
     policy: RateLimitPolicy
   ): Promise<RateEvaluationResult> {
-    if (!this.client || !this.isConnected) {
-      throw new Error('RedisUnavailable: Connection to Redis cluster is offline');
-    }
+    const client = await this.waitUntilReady();
 
     const key = `rateguard:${policy.name}:${dimensions.userAccountHash || dimensions.clientIpHash}`;
     const now = Date.now();
     const windowMs = policy.windowSeconds * 1000;
 
-    const result = (await this.client.eval(
+    const result = (await client.eval(
       this.slidingWindowLua,
       1,
       key,
@@ -98,5 +105,42 @@ export class RedisRateGuardAdapter implements IRateGuardStore {
       remaining,
       retryAfterSeconds,
     };
+  }
+
+  private async waitUntilReady(timeoutMs = 8000): Promise<Redis> {
+    const client = this.client;
+    if (!client) throw new Error('REDIS_URL is not configured.');
+    if (client.status === 'ready') {
+      this.isConnected = true;
+      return client;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error): void => {
+        clearTimeout(timeout);
+        client.off('ready', onReady);
+        client.off('end', onEnd);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onReady = (): void => {
+        this.isConnected = true;
+        finish();
+      };
+      const onEnd = (): void => {
+        this.isConnected = false;
+        finish(new Error('RedisUnavailable: Connection to Redis cluster ended'));
+      };
+      const timeout = setTimeout(
+        () => finish(new Error('RedisUnavailable: Timed out waiting for Redis connection')),
+        timeoutMs
+      );
+
+      client.once('ready', onReady);
+      client.once('end', onEnd);
+      if (client.status === 'ready') onReady();
+    });
+
+    return client;
   }
 }

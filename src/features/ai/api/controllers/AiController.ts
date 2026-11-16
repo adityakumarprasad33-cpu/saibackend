@@ -13,17 +13,23 @@ import { RunixGovAiProvider } from '../../infrastructure/clients/RunixGovAiProvi
 import { PromptRegistry } from '../../domain/services/PromptRegistry';
 import { AiSafetyEngine } from '../../domain/services/AiSafetyEngine';
 import { ImageRecognitionService } from '../../infrastructure/services/ImageRecognitionService';
+import { PanIndiaDepartmentRegistry } from '../../domain/services/PanIndiaDepartmentRegistry';
 
 const provider = new RunixGovAiProvider();
+const isBoundedText = (value: unknown, maxLength: number): value is string =>
+  typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
 
 export class AiController {
   public static async classify(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { title, description, district, stateCode } = req.body;
 
-    if (![title, description, district, stateCode].every(value => typeof value === 'string' && value.trim())) {
-      res.status(400).json({ code: 'InvalidInput', message: 'title, description, district, and stateCode are required.' });
+    if (!isBoundedText(title, 180) || !isBoundedText(description, 4000)) {
+      res.status(400).json({ code: 'InvalidInput', message: 'Provide a title and description within the allowed length.' });
       return;
     }
+
+    const resolvedDistrict = typeof district === 'string' && district.trim() ? district.trim() : 'Central Delhi';
+    const resolvedStateCode = PanIndiaDepartmentRegistry.normalizeStateCode(typeof stateCode === 'string' ? stateCode : undefined);
 
     const sanitizedDesc = AiSafetyEngine.sanitizeInput(description || '');
     if (AiSafetyEngine.detectInjection(sanitizedDesc)) {
@@ -34,31 +40,93 @@ export class AiController {
     const prompt = PromptRegistry.getPrompt('CLASSIFY_GRIEVANCE', {
       title: title.trim(),
       description: sanitizedDesc,
-      district: district.trim(),
-      stateCode: stateCode.trim().toUpperCase(),
+      district: resolvedDistrict,
+      stateCode: resolvedStateCode,
     });
 
-    const result = await provider.generateCompletion<Record<string, unknown>>(prompt);
-    const requiredFields = ['category', 'assignedAgent', 'agentTitle', 'department', 'priority'];
-    if (!result.data || typeof result.data !== 'object' ||
-        requiredFields.some(field => typeof result.data[field] !== 'string' || !String(result.data[field]).trim()) ||
-        typeof result.data.slaHours !== 'number' || result.data.slaHours <= 0) {
-      const unavailable = new Error('AI provider did not return a valid classification.');
-      Object.assign(unavailable, { statusCode: 503 });
-      throw unavailable;
+    let classificationData: Record<string, unknown> | null = null;
+    let metadata: Record<string, unknown> = {
+      provider: 'runixgov-ai',
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      const result = await provider.generateCompletion<Record<string, unknown>>(prompt);
+      if (result.data && typeof result.data === 'object') {
+        const raw = result.data as Record<string, unknown>;
+        const categoryStr = typeof raw.category === 'string' ? raw.category : '';
+        const deptStr = typeof raw.department === 'string' ? raw.department : '';
+        const agentStr = typeof raw.assignedAgent === 'string' ? raw.assignedAgent : '';
+        const titleStr = typeof raw.agentTitle === 'string' ? raw.agentTitle : '';
+        const priorityStr = typeof raw.priority === 'string' ? raw.priority : 'High';
+        const sla = typeof raw.slaHours === 'number' && raw.slaHours > 0 ? raw.slaHours : 48;
+
+        if (categoryStr && deptStr && agentStr && titleStr) {
+          classificationData = {
+            category: categoryStr,
+            assignedAgent: agentStr,
+            agentTitle: titleStr,
+            department: deptStr,
+            priority: priorityStr,
+            slaHours: sla,
+            confidenceScore: 0.95,
+          };
+        } else if (categoryStr) {
+          // If model returned a category (e.g. Roads) but missing specific state department fields,
+          // map it through PanIndiaDepartmentRegistry for this citizen's state.
+          const cat = categoryStr.toLowerCase().includes('water') ? 'water'
+            : categoryStr.toLowerCase().includes('electr') ? 'electricity'
+            : categoryStr.toLowerCase().includes('garb') || categoryStr.toLowerCase().includes('sanit') ? 'sanitation'
+            : categoryStr.toLowerCase().includes('traff') ? 'traffic' : 'roads';
+          const dept = PanIndiaDepartmentRegistry.getDepartment(resolvedStateCode, cat);
+          classificationData = {
+            category: PanIndiaDepartmentRegistry.getCategoryLabel(cat),
+            assignedAgent: dept.agentId,
+            agentTitle: dept.agentTitle,
+            department: dept.departmentName,
+            slaHours: dept.slaHours,
+            priority: priorityStr,
+            confidenceScore: 0.92,
+          };
+        }
+        if (result.metadata) metadata = { ...result.metadata };
+      }
+    } catch (err) {
+      console.warn(`[AiController] LLM classification unavailable (${err instanceof Error ? err.message : String(err)}). Using PanIndiaDepartmentRegistry fallback.`);
+    }
+
+    if (!classificationData) {
+      const routing = PanIndiaDepartmentRegistry.classifyAndRoute(
+        `${title} ${sanitizedDesc}`,
+        resolvedStateCode,
+      );
+      classificationData = {
+        category: PanIndiaDepartmentRegistry.getCategoryLabel(routing.category),
+        assignedAgent: routing.department.agentId,
+        agentTitle: routing.department.agentTitle,
+        department: routing.department.departmentName,
+        slaHours: routing.department.slaHours,
+        priority: routing.priority,
+        confidenceScore: 0.85,
+        defectType: routing.defectType,
+      };
+      metadata = {
+        provider: 'panindia-department-registry',
+        timestamp: new Date().toISOString(),
+      };
     }
 
     res.status(200).json({
-      data: result.data,
-      metadata: result.metadata,
+      data: classificationData,
+      metadata,
     });
   }
 
   public static async draftAssist(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { publicId, description } = req.body;
 
-    if (typeof publicId !== 'string' || !publicId.trim() || typeof description !== 'string' || !description.trim()) {
-      res.status(400).json({ code: 'InvalidInput', message: 'publicId and description are required.' });
+    if (!isBoundedText(publicId, 100) || !isBoundedText(description, 4000)) {
+      res.status(400).json({ code: 'InvalidInput', message: 'Provide a valid grievance reference and description.' });
       return;
     }
 
@@ -83,8 +151,8 @@ export class AiController {
   public static async duplicateCheck(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { targetText, candidateText } = req.body;
 
-    if (typeof targetText !== 'string' || !targetText.trim() || typeof candidateText !== 'string' || !candidateText.trim()) {
-      res.status(400).json({ code: 'InvalidInput', message: 'targetText and candidateText are required.' });
+    if (!isBoundedText(targetText, 4000) || !isBoundedText(candidateText, 4000)) {
+      res.status(400).json({ code: 'InvalidInput', message: 'Provide both text values within the allowed length.' });
       return;
     }
 
@@ -104,8 +172,11 @@ export class AiController {
   public static async customPrompt(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { prompt, systemPrompt, temperature, topP } = req.body;
 
-    if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
-      res.status(400).json({ error: 'ValidationError: "prompt" string is required.' });
+    if (!isBoundedText(prompt, 4000) ||
+        (systemPrompt !== undefined && systemPrompt !== null && !isBoundedText(systemPrompt, 1500)) ||
+        (temperature !== undefined && (typeof temperature !== 'number' || temperature < 0 || temperature > 1)) ||
+        (topP !== undefined && (typeof topP !== 'number' || topP <= 0 || topP > 1))) {
+      res.status(400).json({ code: 'InvalidInput', message: 'Provide a prompt and optional settings within the allowed limits.' });
       return;
     }
 
@@ -130,18 +201,12 @@ export class AiController {
   public static async analyzeImage(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { fileName, imagePath, mimeType, base64Data, defectHint, district, stateCode } = req.body;
 
-    if (typeof base64Data !== 'string' || base64Data.trim().length < 50) {
+    if (typeof base64Data !== 'string' || base64Data.trim().length < 50 || base64Data.length > 25_000_000) {
       res.status(400).json({ code: 'ImageRequired', message: 'Attach a valid image before running IRM.' });
       return;
     }
-    if (typeof district !== 'string' || !district.trim() || district.trim().length > 100) {
-      res.status(400).json({ code: 'DistrictRequired', message: 'Add a valid district to your profile before running IRM.' });
-      return;
-    }
-    if (typeof stateCode !== 'string' || !/^[A-Za-z]{2}$/.test(stateCode.trim())) {
-      res.status(400).json({ code: 'StateCodeRequired', message: 'A valid two-letter state code is required for IRM routing.' });
-      return;
-    }
+    const resolvedDistrict = typeof district === 'string' && district.trim() ? district.trim() : 'Central Delhi';
+    const resolvedStateCode = PanIndiaDepartmentRegistry.normalizeStateCode(typeof stateCode === 'string' ? stateCode : undefined);
 
     const result = await ImageRecognitionService.analyzeImage({
       fileName,
@@ -149,8 +214,8 @@ export class AiController {
       mimeType,
       base64Data,
       defectHint,
-      district,
-      stateCode,
+      district: resolvedDistrict,
+      stateCode: resolvedStateCode,
     });
 
     res.status(200).json({
@@ -164,6 +229,10 @@ export class AiController {
 
   public static async suggestTitles(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { contextText } = req.body;
+    if (contextText !== undefined && !isBoundedText(contextText, 4000)) {
+      res.status(400).json({ code: 'InvalidInput', message: 'Provide text within the allowed length.' });
+      return;
+    }
     const titles = await ImageRecognitionService.generateSuggestions(contextText || '');
     res.status(200).json({
       data: { titles },
@@ -172,8 +241,9 @@ export class AiController {
 
   public static async generateDescription(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { title, imageDescription } = req.body;
-    if (!title || typeof title !== 'string') {
-      res.status(400).json({ error: 'ValidationError: "title" string is required.' });
+    if (!isBoundedText(title, 200) ||
+        (imageDescription !== undefined && !isBoundedText(imageDescription, 4000))) {
+      res.status(400).json({ code: 'InvalidInput', message: 'Provide a title and optional image description within the allowed length.' });
       return;
     }
 

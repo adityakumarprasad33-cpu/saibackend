@@ -12,7 +12,8 @@ export type GrievanceState =
   | 'Closed'
   | 'Reopened';
 
-export type PriorityLevel = 'Low' | 'Medium' | 'High' | 'Urgent';
+export type PriorityLevel = 'Low' | 'Medium' | 'High' | 'Urgent' | 'Critical' | 'Unclassified';
+export type GrievanceRoutingStatus = 'NeedsTriage' | 'Routed';
 
 export interface LocationMetadata {
   latitude?: number | undefined;
@@ -32,6 +33,8 @@ export interface GrievanceProps {
   categoryId: string;
   subcategoryId?: string | undefined;
   departmentId?: string | undefined;
+  jurisdictionId?: string | undefined;
+  routingStatus: GrievanceRoutingStatus;
   priority: PriorityLevel;
   state: GrievanceState;
   location: LocationMetadata;

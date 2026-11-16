@@ -6,20 +6,25 @@ import { Router } from 'express';
 import { AiController } from '../controllers/AiController';
 import { authMiddleware } from '../../../iam/api/middlewares/authMiddleware';
 import { correlationMiddleware } from '../../../iam/api/middlewares/correlationMiddleware';
-import { aiRateLimiter } from '../middlewares/aiRateLimiter';
+import { requireRole } from '../../../iam/api/middlewares/rbacMiddleware';
+import { rateGuardMiddleware } from '../../../../platform/rateguard/middleware/rateGuardMiddleware';
 
 const router = Router();
 
 router.use(correlationMiddleware);
-router.use(authMiddleware);
+router.use(authMiddleware, rateGuardMiddleware);
 
-router.post('/classify', aiRateLimiter, AiController.classify);
-router.post('/draft-assist', aiRateLimiter, AiController.draftAssist);
-router.post('/duplicate-check', aiRateLimiter, AiController.duplicateCheck);
-router.post('/prompt', aiRateLimiter, AiController.customPrompt);
-router.post('/analyze-image', aiRateLimiter, AiController.analyzeImage);
-router.post('/suggest-titles', aiRateLimiter, AiController.suggestTitles);
-router.post('/generate-description', aiRateLimiter, AiController.generateDescription);
+router.post('/classify', AiController.classify);
+router.post(
+  '/draft-assist',
+  requireRole('GovernmentOfficial', 'NodalOfficer', 'DepartmentAdmin', 'SuperAdmin'),
+  AiController.draftAssist,
+);
+router.post('/duplicate-check', AiController.duplicateCheck);
+router.post('/prompt', AiController.customPrompt);
+router.post('/analyze-image', AiController.analyzeImage);
+router.post('/suggest-titles', AiController.suggestTitles);
+router.post('/generate-description', AiController.generateDescription);
 
 // Friendly GET info handlers for browser testing
 router.get('/analyze-image', (_req, res) => {

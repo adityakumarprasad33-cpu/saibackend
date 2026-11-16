@@ -21,10 +21,10 @@ export class ConfigProvider {
   private constructor() {
     const env = (process.env.NODE_ENV as EnvironmentProfile) || 'development';
     const defaultCorsOrigins =
-      'http://localhost:8080,http://127.0.0.1:8080,http://localhost:8085,http://127.0.0.1:8085,http://localhost:3000,http://localhost:5000';
+      'http://localhost:8093,http://127.0.0.1:8093,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8085,http://127.0.0.1:8085,http://localhost:3000';
     const productionCorsOrigin = 'https://runsai.netlify.app';
     const configuredCorsOrigins = env === 'production'
-      ? [process.env.CORS_ALLOWED_ORIGINS ?? '', productionCorsOrigin].join(',')
+      ? [process.env.CORS_ALLOWED_ORIGINS ?? '', productionCorsOrigin].filter(Boolean).join(',')
       : (process.env.CORS_ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN ?? defaultCorsOrigins);
     this.config = {
       environment: env,
@@ -38,6 +38,10 @@ export class ConfigProvider {
       rateLimitMax: 100,
       rateLimitWindowMs: 60000,
     };
+
+    if (this.config.corsAllowedOrigins.includes('*')) {
+      throw new Error('[ConfigProvider] Wildcard CORS origins are not allowed. Configure exact website origins.');
+    }
 
     this.validate();
   }

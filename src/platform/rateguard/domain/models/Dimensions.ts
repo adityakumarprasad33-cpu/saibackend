@@ -24,6 +24,13 @@ export class DimensionFactory {
     return secret;
   }
 
+  public static createScopeHash(scope: string): string {
+    return crypto
+      .createHmac('sha256', DimensionFactory.hmacSecret)
+      .update(`scope:${scope}`)
+      .digest('hex');
+  }
+
   public static createDimensions(
     rawIp: string,
     endpoint: string,

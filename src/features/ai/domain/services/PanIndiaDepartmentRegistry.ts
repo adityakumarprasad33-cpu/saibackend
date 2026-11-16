@@ -169,11 +169,71 @@ const DEFAULT_DEPARTMENTS: StateDepartmentMap = {
 export type CivicDefectCategory = 'roads' | 'water' | 'electricity' | 'sanitation' | 'traffic';
 
 export class PanIndiaDepartmentRegistry {
+  public static readonly STATE_NAME_TO_CODE: Record<string, string> = {
+    'ANDAMAN AND NICOBAR ISLANDS': 'AN',
+    'ANDAMAN & NICOBAR': 'AN',
+    'ANDHRA PRADESH': 'AP',
+    'ARUNACHAL PRADESH': 'AR',
+    'ASSAM': 'AS',
+    'BIHAR': 'BR',
+    'CHANDIGARH': 'CH',
+    'CHHATTISGARH': 'CG',
+    'DADRA AND NAGAR HAVELI AND DAMAN AND DIU': 'DD',
+    'DELHI': 'DL',
+    'NEW DELHI': 'DL',
+    'NCT OF DELHI': 'DL',
+    'NATIONAL CAPITAL TERRITORY OF DELHI': 'DL',
+    'GOA': 'GA',
+    'GUJARAT': 'GJ',
+    'HARYANA': 'HR',
+    'HIMACHAL PRADESH': 'HP',
+    'JAMMU AND KASHMIR': 'JK',
+    'JAMMU & KASHMIR': 'JK',
+    'JHARKHAND': 'JH',
+    'KARNATAKA': 'KA',
+    'KERALA': 'KL',
+    'LADAKH': 'LA',
+    'LAKSHADWEEP': 'LD',
+    'MADHYA PRADESH': 'MP',
+    'MAHARASHTRA': 'MH',
+    'MANIPUR': 'MN',
+    'MEGHALAYA': 'ML',
+    'MIZORAM': 'MZ',
+    'NAGALAND': 'NL',
+    'ODISHA': 'OR',
+    'ORISSA': 'OR',
+    'PUDUCHERRY': 'PY',
+    'PONDICHERRY': 'PY',
+    'PUNJAB': 'PB',
+    'RAJASTHAN': 'RJ',
+    'SIKKIM': 'SK',
+    'TAMIL NADU': 'TN',
+    'TELANGANA': 'TG',
+    'TRIPURA': 'TR',
+    'UTTAR PRADESH': 'UP',
+    'UTTARAKHAND': 'UK',
+    'UTTARANCHAL': 'UK',
+    'WEST BENGAL': 'WB',
+  };
+
+  /**
+   * Normalizes any Indian state name or string to its 2-letter ISO code (e.g. 'Delhi' -> 'DL').
+   */
+  public static normalizeStateCode(raw?: string): string {
+    if (!raw) return 'DL';
+    const clean = raw.trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(clean)) return clean;
+    for (const [name, code] of Object.entries(this.STATE_NAME_TO_CODE)) {
+      if (clean.includes(name) || name.includes(clean)) return code;
+    }
+    return 'DL';
+  }
+
   /**
    * Get the department entry for a specific state and defect category.
    */
   public static getDepartment(stateCode: string, category: CivicDefectCategory): StateDepartmentEntry {
-    const upperCode = (stateCode || '').toUpperCase().trim();
+    const upperCode = this.normalizeStateCode(stateCode);
     const stateMap = STATE_DEPARTMENTS[upperCode] || DEFAULT_DEPARTMENTS;
     return stateMap[category] || DEFAULT_DEPARTMENTS[category];
   }
@@ -193,20 +253,61 @@ export class PanIndiaDepartmentRegistry {
   public static classifyDefectCategory(visualDescription: string): { category: CivicDefectCategory; defectType: string; priority: string } {
     const text = (visualDescription || '').toLowerCase();
 
-    if (text.includes('water') || text.includes('pipe') || text.includes('drain') || text.includes('flood') || text.includes('leak') || text.includes('sewage') || text.includes('sewer') || text.includes('tap')) {
-      return { category: 'water', defectType: 'water_pipeline_issue', priority: 'Urgent' };
+    // Weighted scoring system to accurately prioritize multi-keyword descriptions (e.g. water-filled road potholes)
+    let roadScore = 0;
+    let waterScore = 0;
+    let electricityScore = 0;
+    let sanitationScore = 0;
+    let trafficScore = 0;
+
+    const roadKeywords = ['pothole', 'road', 'asphalt', 'crater', 'pavement', 'bitumen', 'tar', 'crack in road', 'highway', 'flyover', 'broken road', 'roadway', 'footpath', 'sidewalk'];
+    for (const kw of roadKeywords) {
+      if (text.includes(kw)) roadScore += (kw === 'pothole' || kw === 'crater' || kw === 'road' || kw === 'roadway' || kw === 'asphalt') ? 3 : 2;
     }
 
-    if (text.includes('electric') || text.includes('wire') || text.includes('cable') || text.includes('spark') || text.includes('pole') || text.includes('transformer') || text.includes('power') || text.includes('voltage') || text.includes('streetlight') || text.includes('light')) {
-      return { category: 'electricity', defectType: 'electrical_hazard', priority: 'Critical' };
+    const waterKeywords = ['pipe', 'leak', 'burst pipe', 'water supply', 'sewage', 'sewer', 'drainage', 'drain overflow', 'waterlogged', 'flooded', 'tap water', 'drinking water', 'contamination'];
+    for (const kw of waterKeywords) {
+      if (text.includes(kw)) waterScore += (kw === 'pipe' || kw === 'burst pipe' || kw === 'sewage' || kw === 'water supply' || kw === 'leak') ? 3 : 2;
+    }
+    // Generic 'water' only adds to water score if not specifically a water-filled road crater/pothole
+    if (text.includes('water') && !text.includes('pothole') && !text.includes('road')) {
+      waterScore += 1;
     }
 
-    if (text.includes('garbage') || text.includes('trash') || text.includes('waste') || text.includes('dump') || text.includes('sanitat') || text.includes('debris') || text.includes('litter') || text.includes('compost') || text.includes('stench') || text.includes('smell') || text.includes('rubbish')) {
-      return { category: 'sanitation', defectType: 'garbage_overflow', priority: 'High' };
+    const electricityKeywords = ['electric', 'wire', 'cable', 'spark', 'pole', 'transformer', 'power outage', 'voltage', 'streetlight', 'street light', 'blackout', 'hanging wire'];
+    for (const kw of electricityKeywords) {
+      if (text.includes(kw)) electricityScore += (kw === 'wire' || kw === 'electric' || kw === 'transformer' || kw === 'streetlight') ? 3 : 2;
     }
 
-    if (text.includes('traffic') || text.includes('signal') || text.includes('congestion') || text.includes('parking') || text.includes('bus stop') || text.includes('zebra') || text.includes('divider') || text.includes('speed breaker')) {
-      return { category: 'traffic', defectType: 'traffic_safety_issue', priority: 'Medium' };
+    const sanitationKeywords = ['garbage', 'trash', 'waste', 'dump', 'sanitat', 'debris', 'litter', 'compost', 'stench', 'rubbish', 'dustbin'];
+    for (const kw of sanitationKeywords) {
+      if (text.includes(kw)) sanitationScore += (kw === 'garbage' || kw === 'dump' || kw === 'waste') ? 3 : 2;
+    }
+
+    const trafficKeywords = ['traffic signal', 'signal', 'congestion', 'traffic light', 'zebra crossing', 'speed breaker', 'bus stop', 'illegal parking', 'traffic jam'];
+    for (const kw of trafficKeywords) {
+      if (text.includes(kw)) trafficScore += 2;
+    }
+
+    // Determine highest scoring category
+    const maxScore = Math.max(roadScore, waterScore, electricityScore, sanitationScore, trafficScore);
+
+    if (maxScore > 0) {
+      if (electricityScore === maxScore) {
+        return { category: 'electricity', defectType: 'electrical_hazard', priority: 'Critical' };
+      }
+      if (roadScore === maxScore) {
+        return { category: 'roads', defectType: 'road_infrastructure_damage', priority: 'High' };
+      }
+      if (waterScore === maxScore) {
+        return { category: 'water', defectType: 'water_pipeline_issue', priority: 'Urgent' };
+      }
+      if (sanitationScore === maxScore) {
+        return { category: 'sanitation', defectType: 'garbage_overflow', priority: 'High' };
+      }
+      if (trafficScore === maxScore) {
+        return { category: 'traffic', defectType: 'traffic_safety_issue', priority: 'Medium' };
+      }
     }
 
     // Default: roads/infrastructure

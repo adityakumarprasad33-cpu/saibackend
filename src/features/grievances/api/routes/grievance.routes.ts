@@ -6,17 +6,20 @@ import { Router } from 'express';
 import { GrievanceController } from '../controllers/GrievanceController';
 import { authMiddleware } from '../../../iam/api/middlewares/authMiddleware';
 import { correlationMiddleware } from '../../../iam/api/middlewares/correlationMiddleware';
+import { requirePermission, requireRole } from '../../../iam/api/middlewares/rbacMiddleware';
+import { rateGuardMiddleware } from '../../../../platform/rateguard/middleware/rateGuardMiddleware';
 
 const router = Router();
 
 router.use(correlationMiddleware);
-router.use(authMiddleware);
+router.use(authMiddleware, rateGuardMiddleware);
 
+router.get('/triage', requireRole('NodalOfficer', 'DepartmentAdmin', 'SuperAdmin'), requirePermission('grievance.triage.read'), GrievanceController.listTriage);
+router.post('/:id/route', requireRole('NodalOfficer', 'DepartmentAdmin', 'SuperAdmin'), requirePermission('grievance.triage.route'), GrievanceController.routeFromTriage);
 router.post('/', GrievanceController.create);
 router.get('/', GrievanceController.list);
 router.get('/:id', GrievanceController.getById);
 router.get('/:id/attachments', GrievanceController.listAttachments);
-router.patch('/:id', GrievanceController.update);
 router.get('/:id/timeline', GrievanceController.getTimeline);
 router.post('/:id/comments', GrievanceController.addComment);
 router.post('/:id/attachments', GrievanceController.uploadAttachment);

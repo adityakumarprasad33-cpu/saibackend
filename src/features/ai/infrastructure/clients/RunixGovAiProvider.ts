@@ -27,16 +27,46 @@ export class RunixGovAiProvider implements IAiProvider {
     prompt: string,
     options?: AiCompletionOptions,
   ): Promise<AiCompletionResult<T>> {
+    const hasGeminiKey = Boolean((process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim());
+
+    // When Gemini is configured, use fast cloud model as primary (~1.5s latency).
+    if (hasGeminiKey) {
+      try {
+        return await this.tryGemini<T>(prompt, options);
+      } catch (geminiError) {
+        console.warn(
+          `[RunixGovAiProvider] Primary Gemini generation failed (${geminiError instanceof Error ? geminiError.message : String(geminiError)}). Falling back to Ollama.`,
+        );
+      }
+    }
+
+    // Try local Ollama model if configured
     const localResult = await this.tryOllama<T>(prompt, options);
     if (localResult) return localResult;
 
+    // If Gemini was not tried yet (e.g. key checked inside provider), try Gemini now
+    if (!hasGeminiKey) {
+      return await this.tryGemini<T>(prompt, options);
+    }
+
+    const unavailable = new Error(
+      'AI text generation is unavailable. Check the server-side Gemini API or Ollama configuration.',
+    );
+    Object.assign(unavailable, { statusCode: 503 });
+    throw unavailable;
+  }
+
+  private async tryGemini<T>(
+    prompt: string,
+    options?: AiCompletionOptions,
+  ): Promise<AiCompletionResult<T>> {
     const cloudPrompt = options?.systemPrompt
       ? `${options.systemPrompt}\n\n${prompt}`
       : prompt;
     const geminiStartedAt = Date.now();
     const result = await GeminiVisionProvider.generateText(
       cloudPrompt,
-      options?.maxTokens ?? 400,
+      options?.maxTokens ?? 500,
       this.responseSchema(prompt),
     );
     if (!result.success || !result.text.trim()) {
@@ -55,7 +85,11 @@ export class RunixGovAiProvider implements IAiProvider {
       .match(/\{[\s\S]*\}/)?.[0];
     if (jsonBlock) {
       try {
-        data = JSON.parse(jsonBlock) as unknown;
+        const parsed = JSON.parse(jsonBlock);
+        if (parsed && typeof parsed === 'object') {
+          // Always preserve 'text' alongside parsed fields so both structured and chat callers succeed
+          data = { text, ...parsed };
+        }
       } catch {
         // Keep the readable text response for prompts that do not require JSON.
       }
@@ -141,8 +175,6 @@ export class RunixGovAiProvider implements IAiProvider {
         body: JSON.stringify({
           model: this.modelName,
           prompt,
-          system: options?.systemPrompt ||
-            'You are RunixGov AI, a professional public-service assistant. Return valid JSON when the prompt requests a structured result.',
           stream: false,
           options: {
             temperature: options?.temperature ?? 0.3,
@@ -162,7 +194,10 @@ export class RunixGovAiProvider implements IAiProvider {
       const jsonBlock = text.match(/\{[\s\S]*\}/)?.[0];
       if (jsonBlock) {
         try {
-          data = JSON.parse(jsonBlock) as unknown;
+          const parsed = JSON.parse(jsonBlock);
+          if (parsed && typeof parsed === 'object') {
+            data = { text, ...parsed };
+          }
         } catch {
           // Preserve plain text from local models.
         }
